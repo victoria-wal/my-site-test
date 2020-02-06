@@ -1,5 +1,5 @@
 ---
-title: "us-renewables"
+title: "Week 5 Lab: Time series data and mapping"
 author: "Victoria Wallace"
 date: "2/6/2020"
 output: html_document
@@ -10,3 +10,4 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # A heading !
+  
