@@ -6,8 +6,182 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
 ```
 
-# A heading !
+### **Step 1:** Attach packages.
+
+```{r}
+# General:
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(here)
+library(paletteer)
+
+# ts: 
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(forecast)
+
+# Spatial: 
+library(sf)
+library(tmap)
+library(mapview)
+```
+
+### **Step 2:** Read in data on monthly U.S. energy consumption for renewables
+
+```{r}
+us_renew <- read_csv(here::here("data", "renewables_cons_prod.csv")) %>% 
+  clean_names()
+```
+
+Some exploration:
+
+Explore the data frame:
+
+```{r}
+# In the console, I've run:
+# unique(us_renew$description)
+```
+
+I will only be exploring consumption. But first, I need to do some cleaning and wrangling:
+
+
+```{r}
+renew_clean <- us_renew %>%
+  mutate(description = str_to_lower(description)) %>% 
+  filter(str_detect(description, pattern = 'consumption')) %>% 
+  filter(!str_detect(description, pattern = 'total')) %>% 
+  mutate(yr_mo_day = lubridate::parse_date_time(yyyymm, "ym")) %>% 
+  mutate(month_sep = yearmonth(yr_mo_day)) %>% 
+  mutate(value = as.numeric(value)) %>% 
+  drop_na(month_sep, value) %>% 
+  select(-yyyymm, -msn)
+
+# Create a version with month and year in separate columns:
+
+renew_parsed <- renew_clean %>% 
+  mutate(month = lubridate::month(yr_mo_day, label = TRUE)) %>% 
+  mutate(year = lubridate::year(yr_mo_day))
+```
+
+### **Step 3:** Visualization.
+
+```{r}
+renew_gg <-
+  ggplot(data = renew_clean,
+         aes(x = month_sep,
+             y = value)) +
+  geom_line(aes(color = description))
   
+```
+
+Update colors using paletteer:
+
+```{r}
+renew_gg +
+  scale_color_paletteer_d("calecopal::bigsur")
+```
+
+### **Step 4:** Coerce renew_parsed to a tsibble.
+
+```{r}
+renew_ts <- as_tsibble(renew_parsed,
+                       key = description,
+                       index = month_sep)
+```
+
+Look at the data in a few ways:
+
+```{r}
+renew_ts %>% autoplot(value)
+
+renew_ts %>% gg_subseries(value)
+
+# renew_ts %>% gg_season(value)
+
+ggplot(data = renew_parsed,
+       aes(x = month,
+           y = value,
+           group = year)) +
+  geom_line(aes(color = year)) +
+  facet_wrap(~description,
+             ncol = 1,
+             scales = "free",
+             strip.position = "right")
+```
+
+Just look at wind energy cons:
+
+```{r}
+wind_ts <- renew_ts %>% 
+  filter(description == "wind energy consumption")
+
+wind_ts %>% autoplot(value)
+
+wind_ts %>% gg_subseries(value)
+
+ggplot(data = wind_ts,
+       aes(x = month,
+           y = value,
+           group = year)) +
+  geom_line(aes(color = year))
+
+```
+
+# Quarterly average consumption for wind:
+
+```{r}
+wind_quarter <- wind_ts %>% 
+  index_by(year_qu = ~(yearquarter(.))) %>% 
+  summarize(avg_cons = mean(value))
+
+head(wind_quarter)
+```
+
+### **Step 5:** Decomposition and modeling
+
+```{r}
+dcmp <- wind_ts %>% 
+  model(STL(value ~season(window = 5)))
+
+components(dcmp) %>% autoplot()
+```
+
+```{r}
+hist(components(dcmp)$remainder)
+
+# ACF:
+
+wind_ts %>% 
+  ACF(value) %>% 
+  autoplot()
+```
+
+# DANGER DANGER - modeling, know what you're doing (and do a lot of reading)
+
+```{r}
+wind_model <- wind_ts %>% 
+  model(
+    ARIMA(value),
+    ETS(value)
+  ) %>% 
+  fabletools::forecast(h = "10 years")
+
+wind_model %>% autoplot(filter(wind_ts,
+                               year(month_sep) > 2010))
+```
+
+## Make a world map!
+
+```{r}
+world <- read_sf(dsn = here::here('TM_WORLD_BORDERS_SIMPL-0.3-1'),
+                 layer = 'TM_WORLD_BORDERS_SIMPL-0.3')
+```
+
